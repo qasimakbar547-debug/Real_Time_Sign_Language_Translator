@@ -1,9 +1,9 @@
 import streamlit as st
-import cv2
 import numpy as np
-import mediapipe as mp
 import joblib
 import av
+
+from PIL import Image, ImageDraw, ImageFont
 
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
@@ -20,10 +20,10 @@ st.set_page_config(
 
 st.title("🤟 A-Z Real-Time Sign Language Translator")
 
-st.write("Show your hand clearly in front of the camera.")
+st.write("Show your ASL hand sign clearly in front of the camera.")
 
 st.info(
-    "Supported: A • B • C • D • E • F • G • H • I • J • K • L • M • "
+    "Supported Signs: A • B • C • D • E • F • G • H • I • J • K • L • M • "
     "N • O • P • Q • R • S • T • U • V • W • X • Y • Z"
 )
 
@@ -51,6 +51,8 @@ model = load_model()
 # =====================================================
 # MEDIAPIPE
 # =====================================================
+
+import mediapipe as mp
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -106,7 +108,7 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
     # =================================================
-    # PROCESS FRAME
+    # PROCESS CAMERA FRAME
     # =================================================
 
     def recv(self, frame):
@@ -114,31 +116,15 @@ class SignLanguageProcessor(VideoProcessorBase):
         try:
 
             # -----------------------------------------
-            # Camera image
+            # Get camera frame
             # -----------------------------------------
 
-            img = frame.to_ndarray(
-                format="bgr24"
-            )
+            bgr = frame.to_ndarray(format="bgr24")
 
-            h, w, _ = img.shape
+            # Convert BGR -> RGB without OpenCV
+            rgb = bgr[:, :, ::-1].copy()
 
-
-            # -----------------------------------------
-            # RGB
-            # -----------------------------------------
-
-            rgb = cv2.cvtColor(
-                img,
-                cv2.COLOR_BGR2RGB
-            )
-
-
-            # -----------------------------------------
-            # Timestamp
-            # -----------------------------------------
-
-            self.timestamp += 100
+            h, w, _ = rgb.shape
 
 
             # -----------------------------------------
@@ -149,6 +135,13 @@ class SignLanguageProcessor(VideoProcessorBase):
                 image_format=mp.ImageFormat.SRGB,
                 data=rgb
             )
+
+
+            # -----------------------------------------
+            # Timestamp
+            # -----------------------------------------
+
+            self.timestamp += 100
 
 
             # -----------------------------------------
@@ -165,8 +158,16 @@ class SignLanguageProcessor(VideoProcessorBase):
             confidence = 0.0
 
 
+            # -----------------------------------------
+            # PIL image for drawing
+            # -----------------------------------------
+
+            image = Image.fromarray(rgb)
+            draw = ImageDraw.Draw(image)
+
+
             # =================================================
-            # HAND DETECTED
+            # HAND FOUND
             # =================================================
 
             if result.hand_landmarks:
@@ -175,7 +176,7 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
                 # -----------------------------------------
-                # Draw landmarks
+                # Draw hand landmarks
                 # -----------------------------------------
 
                 for landmark in hand:
@@ -183,12 +184,14 @@ class SignLanguageProcessor(VideoProcessorBase):
                     x = int(landmark.x * w)
                     y = int(landmark.y * h)
 
-                    cv2.circle(
-                        img,
-                        (x, y),
-                        6,
-                        (0, 255, 0),
-                        -1
+                    draw.ellipse(
+                        (
+                            x - 5,
+                            y - 5,
+                            x + 5,
+                            y + 5
+                        ),
+                        fill=(0, 255, 0)
                     )
 
 
@@ -204,17 +207,15 @@ class SignLanguageProcessor(VideoProcessorBase):
                     x2 = int(hand[end].x * w)
                     y2 = int(hand[end].y * h)
 
-                    cv2.line(
-                        img,
-                        (x1, y1),
-                        (x2, y2),
-                        (0, 255, 0),
-                        3
+                    draw.line(
+                        (x1, y1, x2, y2),
+                        fill=(0, 255, 0),
+                        width=3
                     )
 
 
                 # -----------------------------------------
-                # Features
+                # Create features
                 # -----------------------------------------
 
                 features = []
@@ -235,7 +236,7 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
                 # -----------------------------------------
-                # Prediction
+                # Predict sign
                 # -----------------------------------------
 
                 prediction = str(
@@ -259,30 +260,22 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
                 # -----------------------------------------
-                # HAND DETECTED TEXT
+                # Hand detected
                 # -----------------------------------------
 
-                cv2.putText(
-                    img,
+                draw.text(
+                    (20, 135),
                     "HAND DETECTED",
-                    (20, 140),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2
+                    fill=(0, 255, 0)
                 )
 
 
             else:
 
-                cv2.putText(
-                    img,
+                draw.text(
+                    (20, 135),
                     "SHOW YOUR HAND",
-                    (20, 140),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 0, 255),
-                    2
+                    fill=(255, 0, 0)
                 )
 
 
@@ -290,43 +283,44 @@ class SignLanguageProcessor(VideoProcessorBase):
             # RESULT BOX
             # =================================================
 
-            cv2.rectangle(
-                img,
-                (10, 10),
-                (410, 115),
-                (0, 0, 0),
-                -1
+            draw.rectangle(
+                (10, 10, 410, 115),
+                fill=(0, 0, 0)
             )
 
 
-            cv2.putText(
-                img,
+            # -----------------------------------------
+            # BIG SIGN
+            # -----------------------------------------
+
+            draw.text(
+                (25, 30),
                 f"Sign: {prediction}",
-                (25, 55),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (255, 255, 255),
-                2
+                fill=(255, 255, 255)
             )
 
 
-            cv2.putText(
-                img,
+            # -----------------------------------------
+            # Confidence
+            # -----------------------------------------
+
+            draw.text(
+                (25, 70),
                 f"Confidence: {confidence:.1f}%",
-                (25, 90),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2
+                fill=(255, 255, 255)
             )
 
 
-            # =================================================
-            # RETURN
-            # =================================================
+            # -----------------------------------------
+            # Convert RGB -> BGR
+            # -----------------------------------------
+
+            output_rgb = np.array(image)
+            output_bgr = output_rgb[:, :, ::-1].copy()
+
 
             return av.VideoFrame.from_ndarray(
-                img,
+                output_bgr,
                 format="bgr24"
             )
 
@@ -334,43 +328,40 @@ class SignLanguageProcessor(VideoProcessorBase):
         except Exception as e:
 
             # -----------------------------------------
-            # Show error on camera
+            # Error frame
             # -----------------------------------------
 
-            img = frame.to_ndarray(
+            bgr = frame.to_ndarray(
                 format="bgr24"
             )
 
-            cv2.rectangle(
-                img,
-                (10, 10),
-                (700, 90),
-                (0, 0, 0),
-                -1
+            rgb = bgr[:, :, ::-1].copy()
+
+            image = Image.fromarray(rgb)
+            draw = ImageDraw.Draw(image)
+
+            draw.rectangle(
+                (10, 10, 700, 90),
+                fill=(0, 0, 0)
             )
 
-            cv2.putText(
-                img,
-                "ERROR: Check MediaPipe / Model",
-                (20, 45),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 0, 255),
-                2
+            draw.text(
+                (20, 25),
+                "PROCESSING ERROR",
+                fill=(255, 0, 0)
             )
 
-            cv2.putText(
-                img,
-                str(e)[:80],
-                (20, 75),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
-                (255, 255, 255),
-                1
+            draw.text(
+                (20, 55),
+                str(e)[:90],
+                fill=(255, 255, 255)
             )
+
+            output_rgb = np.array(image)
+            output_bgr = output_rgb[:, :, ::-1].copy()
 
             return av.VideoFrame.from_ndarray(
-                img,
+                output_bgr,
                 format="bgr24"
             )
 
