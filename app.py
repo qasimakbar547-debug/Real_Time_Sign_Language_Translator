@@ -9,7 +9,7 @@ from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 
 
 # =====================================================
-# PAGE
+# PAGE CONFIG
 # =====================================================
 
 st.set_page_config(
@@ -19,13 +19,13 @@ st.set_page_config(
 )
 
 st.title("🤟 Real-Time Sign Language Translator")
-st.write("Show your hand sign in front of the camera.")
+st.write("Show your hand sign to the camera.")
 
 st.info("Supported Signs: A • B • C • D • E")
 
 
 # =====================================================
-# FILES
+# FILE PATHS
 # =====================================================
 
 MODEL_PATH = "sign_model.pkl"
@@ -33,10 +33,15 @@ HAND_MODEL_PATH = "hand_landmarker.task"
 
 
 # =====================================================
-# LOAD MODEL
+# LOAD RANDOM FOREST MODEL
 # =====================================================
 
-model = joblib.load(MODEL_PATH)
+@st.cache_resource
+def load_model():
+    return joblib.load(MODEL_PATH)
+
+
+model = load_model()
 
 
 # =====================================================
@@ -88,18 +93,21 @@ class SignLanguageProcessor(VideoProcessorBase):
 
         self.timestamp = 0
 
-        # Process only every 3rd frame
+        # Process only 1 out of every 5 frames
         self.frame_count = 0
 
-        # Store last prediction
-        self.last_prediction = "No Hand"
-        self.last_confidence = 0.0
+        # Previous result
+        self.prediction = "No Hand"
+        self.confidence = 0.0
+
+        # Store landmarks from previous detection
+        self.last_hand = None
 
 
     def recv(self, frame):
 
         # =================================================
-        # GET CAMERA FRAME
+        # CAMERA FRAME
         # =================================================
 
         img = frame.to_ndarray(format="bgr24")
@@ -108,32 +116,21 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
         # =================================================
-        # RESIZE IMAGE
+        # SMALL RESOLUTION
         # =================================================
 
-        height, width = img.shape[:2]
-
-        max_width = 480
-
-        if width > max_width:
-
-            scale = max_width / width
-
-            new_width = max_width
-            new_height = int(height * scale)
-
-            img = cv2.resize(
-                img,
-                (new_width, new_height),
-                interpolation=cv2.INTER_AREA
-            )
+        img = cv2.resize(
+            img,
+            (480, 360),
+            interpolation=cv2.INTER_AREA
+        )
 
 
         # =================================================
-        # PROCESS ONLY EVERY 3RD FRAME
+        # PROCESS EVERY 5TH FRAME
         # =================================================
 
-        if self.frame_count % 3 == 0:
+        if self.frame_count % 5 == 0:
 
             rgb = cv2.cvtColor(
                 img,
@@ -148,7 +145,7 @@ class SignLanguageProcessor(VideoProcessorBase):
             )
 
             # =================================================
-            # HAND DETECTION
+            # DETECT HAND
             # =================================================
 
             result = self.landmarker.detect_for_video(
@@ -157,64 +154,11 @@ class SignLanguageProcessor(VideoProcessorBase):
             )
 
 
-            # =================================================
-            # NO HAND
-            # =================================================
-
-            if not result.hand_landmarks:
-
-                self.last_prediction = "No Hand"
-                self.last_confidence = 0.0
-
-
-            # =================================================
-            # HAND FOUND
-            # =================================================
-
-            else:
+            if result.hand_landmarks:
 
                 hand = result.hand_landmarks[0]
 
-                h, w, _ = img.shape
-
-
-                # =================================================
-                # DRAW LANDMARKS
-                # =================================================
-
-                for landmark in hand:
-
-                    x = int(landmark.x * w)
-                    y = int(landmark.y * h)
-
-                    cv2.circle(
-                        img,
-                        (x, y),
-                        3,
-                        (0, 255, 0),
-                        -1
-                    )
-
-
-                # =================================================
-                # DRAW CONNECTIONS
-                # =================================================
-
-                for start, end in HAND_CONNECTIONS:
-
-                    x1 = int(hand[start].x * w)
-                    y1 = int(hand[start].y * h)
-
-                    x2 = int(hand[end].x * w)
-                    y2 = int(hand[end].y * h)
-
-                    cv2.line(
-                        img,
-                        (x1, y1),
-                        (x2, y2),
-                        (0, 255, 0),
-                        1
-                    )
+                self.last_hand = hand
 
 
                 # =================================================
@@ -242,9 +186,9 @@ class SignLanguageProcessor(VideoProcessorBase):
                 # PREDICTION
                 # =================================================
 
-                self.last_prediction = model.predict(
-                    features
-                )[0]
+                self.prediction = str(
+                    model.predict(features)[0]
+                )
 
 
                 # =================================================
@@ -257,13 +201,54 @@ class SignLanguageProcessor(VideoProcessorBase):
                         features
                     )[0]
 
-                    self.last_confidence = (
+                    self.confidence = (
                         float(np.max(probabilities)) * 100
                     )
 
-                else:
+            else:
 
-                    self.last_confidence = 0.0
+                self.last_hand = None
+                self.prediction = "No Hand"
+                self.confidence = 0.0
+
+
+        # =================================================
+        # DRAW LAST HAND
+        # =================================================
+
+        if self.last_hand:
+
+            h, w, _ = img.shape
+
+            for landmark in self.last_hand:
+
+                x = int(landmark.x * w)
+                y = int(landmark.y * h)
+
+                cv2.circle(
+                    img,
+                    (x, y),
+                    3,
+                    (0, 255, 0),
+                    -1
+                )
+
+
+            for start, end in HAND_CONNECTIONS:
+
+                x1 = int(self.last_hand[start].x * w)
+                y1 = int(self.last_hand[start].y * h)
+
+                x2 = int(self.last_hand[end].x * w)
+                y2 = int(self.last_hand[end].y * h)
+
+                cv2.line(
+                    img,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    1
+                )
 
 
         # =================================================
@@ -273,7 +258,7 @@ class SignLanguageProcessor(VideoProcessorBase):
         cv2.rectangle(
             img,
             (10, 10),
-            (330, 90),
+            (320, 85),
             (0, 0, 0),
             -1
         )
@@ -281,8 +266,8 @@ class SignLanguageProcessor(VideoProcessorBase):
 
         cv2.putText(
             img,
-            f"Sign: {self.last_prediction}",
-            (20, 45),
+            f"Sign: {self.prediction}",
+            (20, 42),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
             (255, 255, 255),
@@ -292,17 +277,17 @@ class SignLanguageProcessor(VideoProcessorBase):
 
         cv2.putText(
             img,
-            f"Confidence: {self.last_confidence:.1f}%",
-            (20, 72),
+            f"Confidence: {self.confidence:.1f}%",
+            (20, 68),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
+            0.5,
             (255, 255, 255),
-            2
+            1
         )
 
 
         # =================================================
-        # RETURN FRAME
+        # RETURN CAMERA FRAME
         # =================================================
 
         return av.VideoFrame.from_ndarray(
@@ -312,7 +297,7 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
 # =====================================================
-# CAMERA
+# WEB CAMERA
 # =====================================================
 
 webrtc_streamer(
@@ -324,7 +309,7 @@ webrtc_streamer(
         "video": {
             "width": {"ideal": 480},
             "height": {"ideal": 360},
-            "frameRate": {"ideal": 15}
+            "frameRate": {"ideal": 10}
         },
         "audio": False
     },
@@ -334,7 +319,7 @@ webrtc_streamer(
 
 
 # =====================================================
-# INFO
+# FOOTER
 # =====================================================
 
 st.markdown("---")
