@@ -20,15 +20,10 @@ st.set_page_config(
 
 st.title("🤟 A-Z Real-Time Sign Language Translator")
 
-st.write(
-    "Show an ASL hand sign in front of the camera."
-)
+st.write("Show your hand clearly in front of the camera.")
 
 st.info(
-    "Supported Signs: A • B • C • D • E • F • G • H • I • J • K • L • M"
-)
-
-st.info(
+    "Supported: A • B • C • D • E • F • G • H • I • J • K • L • M • "
     "N • O • P • Q • R • S • T • U • V • W • X • Y • Z"
 )
 
@@ -42,12 +37,11 @@ HAND_MODEL_PATH = "hand_landmarker.task"
 
 
 # =====================================================
-# LOAD TRAINED MODEL
+# LOAD MODEL
 # =====================================================
 
 @st.cache_resource
 def load_model():
-
     return joblib.load(MODEL_PATH)
 
 
@@ -69,32 +63,11 @@ BaseOptions = python.BaseOptions
 # =====================================================
 
 HAND_CONNECTIONS = [
-
-    (0, 1),
-    (1, 2),
-    (2, 3),
-    (3, 4),
-
-    (0, 5),
-    (5, 6),
-    (6, 7),
-    (7, 8),
-
-    (5, 9),
-    (9, 10),
-    (10, 11),
-    (11, 12),
-
-    (9, 13),
-    (13, 14),
-    (14, 15),
-    (15, 16),
-
-    (13, 17),
-    (17, 18),
-    (18, 19),
-    (19, 20),
-
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (5, 9), (9, 10), (10, 11), (11, 12),
+    (9, 13), (13, 14), (14, 15), (15, 16),
+    (13, 17), (17, 18), (18, 19), (19, 20),
     (0, 17)
 ]
 
@@ -107,8 +80,9 @@ class SignLanguageProcessor(VideoProcessorBase):
 
     def _init_(self):
 
-        options = vision.HandLandmarkerOptions(
+        self.timestamp = 0
 
+        options = vision.HandLandmarkerOptions(
             base_options=BaseOptions(
                 model_asset_path=HAND_MODEL_PATH
             ),
@@ -117,11 +91,11 @@ class SignLanguageProcessor(VideoProcessorBase):
 
             num_hands=1,
 
-            min_hand_detection_confidence=0.5,
+            min_hand_detection_confidence=0.3,
 
-            min_hand_presence_confidence=0.5,
+            min_hand_presence_confidence=0.3,
 
-            min_tracking_confidence=0.5
+            min_tracking_confidence=0.3
         )
 
         self.landmarker = (
@@ -130,279 +104,275 @@ class SignLanguageProcessor(VideoProcessorBase):
             )
         )
 
-        self.timestamp = 0
-
 
     # =================================================
-    # PROCESS CAMERA FRAME
+    # PROCESS FRAME
     # =================================================
 
     def recv(self, frame):
 
-        img = frame.to_ndarray(
-            format="bgr24"
-        )
+        try:
 
+            # -----------------------------------------
+            # Camera image
+            # -----------------------------------------
 
-        # ---------------------------------------------
-        # Convert BGR to RGB
-        # ---------------------------------------------
-
-        rgb = cv2.cvtColor(
-            img,
-            cv2.COLOR_BGR2RGB
-        )
-
-
-        # ---------------------------------------------
-        # Timestamp
-        # ---------------------------------------------
-
-        self.timestamp += 33
-
-
-        # ---------------------------------------------
-        # MediaPipe Image
-        # ---------------------------------------------
-
-        mp_image = mp.Image(
-
-            image_format=mp.ImageFormat.SRGB,
-
-            data=rgb
-        )
-
-
-        # ---------------------------------------------
-        # Detect Hand
-        # ---------------------------------------------
-
-        result = self.landmarker.detect_for_video(
-
-            mp_image,
-
-            self.timestamp
-        )
-
-
-        prediction = "No Hand"
-
-        confidence = 0.0
-
-
-        # =================================================
-        # HAND FOUND
-        # =================================================
-
-        if result.hand_landmarks:
-
-            hand = result.hand_landmarks[0]
+            img = frame.to_ndarray(
+                format="bgr24"
+            )
 
             h, w, _ = img.shape
 
 
-            # ---------------------------------------------
-            # Draw landmarks
-            # ---------------------------------------------
+            # -----------------------------------------
+            # RGB
+            # -----------------------------------------
 
-            for landmark in hand:
+            rgb = cv2.cvtColor(
+                img,
+                cv2.COLOR_BGR2RGB
+            )
 
-                x = int(
-                    landmark.x * w
+
+            # -----------------------------------------
+            # Timestamp
+            # -----------------------------------------
+
+            self.timestamp += 100
+
+
+            # -----------------------------------------
+            # MediaPipe image
+            # -----------------------------------------
+
+            mp_image = mp.Image(
+                image_format=mp.ImageFormat.SRGB,
+                data=rgb
+            )
+
+
+            # -----------------------------------------
+            # Detect hand
+            # -----------------------------------------
+
+            result = self.landmarker.detect_for_video(
+                mp_image,
+                self.timestamp
+            )
+
+
+            prediction = "No Hand"
+            confidence = 0.0
+
+
+            # =================================================
+            # HAND DETECTED
+            # =================================================
+
+            if result.hand_landmarks:
+
+                hand = result.hand_landmarks[0]
+
+
+                # -----------------------------------------
+                # Draw landmarks
+                # -----------------------------------------
+
+                for landmark in hand:
+
+                    x = int(landmark.x * w)
+                    y = int(landmark.y * h)
+
+                    cv2.circle(
+                        img,
+                        (x, y),
+                        6,
+                        (0, 255, 0),
+                        -1
+                    )
+
+
+                # -----------------------------------------
+                # Draw connections
+                # -----------------------------------------
+
+                for start, end in HAND_CONNECTIONS:
+
+                    x1 = int(hand[start].x * w)
+                    y1 = int(hand[start].y * h)
+
+                    x2 = int(hand[end].x * w)
+                    y2 = int(hand[end].y * h)
+
+                    cv2.line(
+                        img,
+                        (x1, y1),
+                        (x2, y2),
+                        (0, 255, 0),
+                        3
+                    )
+
+
+                # -----------------------------------------
+                # Features
+                # -----------------------------------------
+
+                features = []
+
+                for landmark in hand:
+
+                    features.extend([
+                        landmark.x,
+                        landmark.y,
+                        landmark.z
+                    ])
+
+
+                features = np.array(
+                    features,
+                    dtype=np.float32
+                ).reshape(1, -1)
+
+
+                # -----------------------------------------
+                # Prediction
+                # -----------------------------------------
+
+                prediction = str(
+                    model.predict(features)[0]
                 )
 
-                y = int(
-                    landmark.y * h
-                )
 
-                cv2.circle(
+                # -----------------------------------------
+                # Confidence
+                # -----------------------------------------
 
+                if hasattr(model, "predict_proba"):
+
+                    probabilities = model.predict_proba(
+                        features
+                    )[0]
+
+                    confidence = (
+                        float(np.max(probabilities)) * 100
+                    )
+
+
+                # -----------------------------------------
+                # HAND DETECTED TEXT
+                # -----------------------------------------
+
+                cv2.putText(
                     img,
-
-                    (x, y),
-
-                    5,
-
+                    "HAND DETECTED",
+                    (20, 140),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
                     (0, 255, 0),
-
-                    -1
+                    2
                 )
 
 
-            # ---------------------------------------------
-            # Draw connections
-            # ---------------------------------------------
+            else:
 
-            for start, end in HAND_CONNECTIONS:
-
-                x1 = int(
-                    hand[start].x * w
-                )
-
-                y1 = int(
-                    hand[start].y * h
-                )
-
-                x2 = int(
-                    hand[end].x * w
-                )
-
-                y2 = int(
-                    hand[end].y * h
-                )
-
-                cv2.line(
-
+                cv2.putText(
                     img,
-
-                    (x1, y1),
-
-                    (x2, y2),
-
-                    (0, 255, 0),
-
+                    "SHOW YOUR HAND",
+                    (20, 140),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
                     2
                 )
 
 
             # =================================================
-            # CREATE FEATURES
+            # RESULT BOX
             # =================================================
 
-            features = []
-
-            for landmark in hand:
-
-                features.extend([
-
-                    landmark.x,
-
-                    landmark.y,
-
-                    landmark.z
-                ])
+            cv2.rectangle(
+                img,
+                (10, 10),
+                (410, 115),
+                (0, 0, 0),
+                -1
+            )
 
 
-            features = np.array(
+            cv2.putText(
+                img,
+                f"Sign: {prediction}",
+                (25, 55),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (255, 255, 255),
+                2
+            )
 
-                features,
 
-                dtype=np.float32
-
-            ).reshape(1, -1)
-
-
-            # =================================================
-            # PREDICT A-Z
-            # =================================================
-
-            prediction = str(
-
-                model.predict(features)[0]
+            cv2.putText(
+                img,
+                f"Confidence: {confidence:.1f}%",
+                (25, 90),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255, 255, 255),
+                2
             )
 
 
             # =================================================
-            # CONFIDENCE
+            # RETURN
             # =================================================
 
-            if hasattr(
-
-                model,
-
-                "predict_proba"
-            ):
-
-                probabilities = (
-
-                    model.predict_proba(
-                        features
-                    )[0]
-                )
+            return av.VideoFrame.from_ndarray(
+                img,
+                format="bgr24"
+            )
 
 
-                confidence = (
+        except Exception as e:
 
-                    float(
-                        np.max(
-                            probabilities
-                        )
-                    ) * 100
-                )
+            # -----------------------------------------
+            # Show error on camera
+            # -----------------------------------------
 
+            img = frame.to_ndarray(
+                format="bgr24"
+            )
 
-        # =================================================
-        # RESULT BOX
-        # =================================================
+            cv2.rectangle(
+                img,
+                (10, 10),
+                (700, 90),
+                (0, 0, 0),
+                -1
+            )
 
-        cv2.rectangle(
+            cv2.putText(
+                img,
+                "ERROR: Check MediaPipe / Model",
+                (20, 45),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 0, 255),
+                2
+            )
 
-            img,
+            cv2.putText(
+                img,
+                str(e)[:80],
+                (20, 75),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 255, 255),
+                1
+            )
 
-            (10, 10),
-
-            (390, 115),
-
-            (0, 0, 0),
-
-            -1
-        )
-
-
-        # ---------------------------------------------
-        # SIGN
-        # ---------------------------------------------
-
-        cv2.putText(
-
-            img,
-
-            f"Sign: {prediction}",
-
-            (25, 55),
-
-            cv2.FONT_HERSHEY_SIMPLEX,
-
-            1,
-
-            (255, 255, 255),
-
-            2
-        )
-
-
-        # ---------------------------------------------
-        # Confidence
-        # ---------------------------------------------
-
-        cv2.putText(
-
-            img,
-
-            f"Confidence: {confidence:.1f}%",
-
-            (25, 90),
-
-            cv2.FONT_HERSHEY_SIMPLEX,
-
-            0.6,
-
-            (255, 255, 255),
-
-            2
-        )
-
-
-        # =================================================
-        # RETURN FRAME
-        # =================================================
-
-        return av.VideoFrame.from_ndarray(
-
-            img,
-
-            format="bgr24"
-        )
+            return av.VideoFrame.from_ndarray(
+                img,
+                format="bgr24"
+            )
 
 
 # =====================================================
@@ -416,22 +386,11 @@ webrtc_streamer(
     video_processor_factory=SignLanguageProcessor,
 
     media_stream_constraints={
-
         "video": {
-
-            "width": {
-                "ideal": 480
-            },
-
-            "height": {
-                "ideal": 360
-            },
-
-            "frameRate": {
-                "ideal": 10
-            }
+            "width": {"ideal": 640},
+            "height": {"ideal": 480},
+            "frameRate": {"ideal": 10}
         },
-
         "audio": False
     },
 
@@ -448,11 +407,8 @@ st.markdown("---")
 st.subheader("🤟 Supported ASL Letters")
 
 st.write(
-
     "A • B • C • D • E • F • G • H • I • J • K • L • M • "
     "N • O • P • Q • R • S • T • U • V • W • X • Y • Z"
 )
 
-st.write(
-    "📱 Mobile Camera Supported"
-)
+st.write("📱 Mobile Camera Supported"
