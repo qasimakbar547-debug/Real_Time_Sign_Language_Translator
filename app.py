@@ -411,4 +411,4 @@ st.write(
     "N • O • P • Q • R • S • T • U • V • W • X • Y • Z"
 )
 
-st.write("📱 Mobile Camera Supported"
+st.write("📱 Mobile Camera Supported")
