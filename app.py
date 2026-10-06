@@ -3,6 +3,7 @@ import numpy as np
 import joblib
 import av
 import time
+import threading
 
 from PIL import Image, ImageDraw
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
@@ -29,14 +30,13 @@ st.write(
 )
 
 st.info(
-    "Supported Signs: "
-    "A • B • C • D • E • F • G • H • I • J • K • L • M • "
+    "Supported Signs: A • B • C • D • E • F • G • H • I • J • K • L • M • "
     "N • O • P • Q • R • S • T • U • V • W • X • Y • Z"
 )
 
 
 # =========================================================
-# FILE PATHS
+# FILES
 # =========================================================
 
 MODEL_PATH = "sign_model.pkl"
@@ -44,7 +44,7 @@ HAND_MODEL_PATH = "hand_landmarker.task"
 
 
 # =========================================================
-# LOAD TRAINED A-Z MODEL
+# LOAD TRAINED MODEL
 # =========================================================
 
 @st.cache_resource
@@ -56,7 +56,7 @@ model = load_model()
 
 
 # =========================================================
-# MEDIAPIPE SETUP
+# MEDIAPIPE
 # =========================================================
 
 BaseOptions = python.BaseOptions
@@ -102,23 +102,40 @@ HAND_CONNECTIONS = [
 
 class SignLanguageProcessor(VideoProcessorBase):
 
-    # IMPORTANT:
-    # Python constructor must be _init_
-    # NOT init
-
     def _init_(self):
 
-        # -------------------------------------------------
-        # Timestamp
-        # -------------------------------------------------
+        # -----------------------------------------------
+        # Call parent constructor
+        # -----------------------------------------------
+
+        try:
+            super()._init_()
+        except Exception:
+            pass
+
+        # -----------------------------------------------
+        # Safe initial state
+        # -----------------------------------------------
 
         self.timestamp = 0
+        self.landmarker = None
+        self.lock = threading.Lock()
 
-        # -------------------------------------------------
-        # Create MediaPipe Hand Landmarker
-        # -------------------------------------------------
+        # -----------------------------------------------
+        # Create MediaPipe
+        # -----------------------------------------------
+
+        self.create_landmarker()
+
+
+    # =====================================================
+    # CREATE LANDMARKER
+    # =====================================================
+
+    def create_landmarker(self):
 
         options = vision.HandLandmarkerOptions(
+
             base_options=BaseOptions(
                 model_asset_path=HAND_MODEL_PATH
             ),
@@ -142,30 +159,77 @@ class SignLanguageProcessor(VideoProcessorBase):
 
 
     # =====================================================
-    # PROCESS CAMERA FRAME
+    # GET SAFE TIMESTAMP
+    # =====================================================
+
+    def get_timestamp(self):
+
+        # IMPORTANT:
+        # Never assume timestamp already exists.
+
+        old_timestamp = getattr(
+            self,
+            "timestamp",
+            0
+        )
+
+        current_timestamp = int(
+            time.monotonic() * 1000
+        )
+
+        if current_timestamp <= old_timestamp:
+
+            current_timestamp = (
+                old_timestamp + 1
+            )
+
+        self.timestamp = current_timestamp
+
+        return current_timestamp
+
+
+    # =====================================================
+    # PROCESS FRAME
     # =====================================================
 
     def recv(self, frame):
 
         try:
 
-            # -------------------------------------------------
-            # Get camera frame
-            # -------------------------------------------------
+            # -------------------------------------------
+            # Make sure state exists
+            # -------------------------------------------
+
+            if not hasattr(
+                self,
+                "timestamp"
+            ):
+                self.timestamp = 0
+
+            if not hasattr(
+                self,
+                "landmarker"
+            ) or self.landmarker is None:
+
+                self.create_landmarker()
+
+
+            # -------------------------------------------
+            # Camera frame
+            # -------------------------------------------
 
             bgr = frame.to_ndarray(
                 format="bgr24"
             )
 
-            # BGR -> RGB
             rgb = bgr[:, :, ::-1].copy()
 
             height, width, _ = rgb.shape
 
 
-            # -------------------------------------------------
-            # Create MediaPipe Image
-            # -------------------------------------------------
+            # -------------------------------------------
+            # MediaPipe image
+            # -------------------------------------------
 
             mp_image = mp.Image(
                 image_format=mp.ImageFormat.SRGB,
@@ -173,51 +237,42 @@ class SignLanguageProcessor(VideoProcessorBase):
             )
 
 
-            # -------------------------------------------------
-            # Generate proper increasing timestamp
-            # -------------------------------------------------
+            # -------------------------------------------
+            # SAFE TIMESTAMP
+            # -------------------------------------------
 
-            current_timestamp = int(
-                time.monotonic() * 1000
-            )
-
-            # MediaPipe VIDEO mode requires timestamps
-            # to continuously increase.
-
-            if current_timestamp <= self.timestamp:
-                current_timestamp = self.timestamp + 1
-
-            self.timestamp = current_timestamp
+            timestamp = self.get_timestamp()
 
 
-            # -------------------------------------------------
-            # Detect hand
-            # -------------------------------------------------
+            # -------------------------------------------
+            # MediaPipe detection
+            # -------------------------------------------
 
             result = self.landmarker.detect_for_video(
                 mp_image,
-                self.timestamp
+                timestamp
             )
 
 
-            # -------------------------------------------------
-            # Default result
-            # -------------------------------------------------
+            # -------------------------------------------
+            # Default
+            # -------------------------------------------
 
             prediction = "No Hand"
             confidence = 0.0
 
 
-            # -------------------------------------------------
-            # PIL image for drawing
-            # -------------------------------------------------
+            # -------------------------------------------
+            # PIL image
+            # -------------------------------------------
 
             image = Image.fromarray(rgb)
+
             draw = ImageDraw.Draw(image)
 
 
             # =================================================
-            # HAND DETECTED
+            # HAND FOUND
             # =================================================
 
             if result.hand_landmarks:
@@ -225,9 +280,9 @@ class SignLanguageProcessor(VideoProcessorBase):
                 hand = result.hand_landmarks[0]
 
 
-                # -------------------------------------------------
+                # -------------------------------------------
                 # Draw landmarks
-                # -------------------------------------------------
+                # -------------------------------------------
 
                 for landmark in hand:
 
@@ -250,9 +305,9 @@ class SignLanguageProcessor(VideoProcessorBase):
                     )
 
 
-                # -------------------------------------------------
+                # -------------------------------------------
                 # Draw connections
-                # -------------------------------------------------
+                # -------------------------------------------
 
                 for start, end in HAND_CONNECTIONS:
 
@@ -284,41 +339,47 @@ class SignLanguageProcessor(VideoProcessorBase):
                     )
 
 
-                # -------------------------------------------------
-                # Create same 63 features used during training
-                # -------------------------------------------------
+                # -------------------------------------------
+                # CREATE 63 FEATURES
+                # -------------------------------------------
 
                 features = []
 
                 for landmark in hand:
 
-                    features.extend(
-                        [
-                            landmark.x,
-                            landmark.y,
-                            landmark.z
-                        ]
+                    features.append(
+                        landmark.x
+                    )
+
+                    features.append(
+                        landmark.y
+                    )
+
+                    features.append(
+                        landmark.z
                     )
 
 
                 features = np.array(
                     features,
                     dtype=np.float32
-                ).reshape(1, -1)
+                ).reshape(1, 63)
 
 
-                # -------------------------------------------------
-                # Predict A-Z sign
-                # -------------------------------------------------
+                # -------------------------------------------
+                # MODEL PREDICTION
+                # -------------------------------------------
 
                 prediction = str(
-                    model.predict(features)[0]
+                    model.predict(
+                        features
+                    )[0]
                 )
 
 
-                # -------------------------------------------------
-                # Prediction confidence
-                # -------------------------------------------------
+                # -------------------------------------------
+                # CONFIDENCE
+                # -------------------------------------------
 
                 if hasattr(
                     model,
@@ -333,14 +394,16 @@ class SignLanguageProcessor(VideoProcessorBase):
 
                     confidence = (
                         float(
-                            np.max(probabilities)
+                            np.max(
+                                probabilities
+                            )
                         ) * 100
                     )
 
 
-                # -------------------------------------------------
-                # Hand detected message
-                # -------------------------------------------------
+                # -------------------------------------------
+                # HAND DETECTED
+                # -------------------------------------------
 
                 draw.text(
                     (20, 135),
@@ -367,14 +430,14 @@ class SignLanguageProcessor(VideoProcessorBase):
             # =================================================
 
             draw.rectangle(
-                (10, 10, 430, 115),
+                (10, 10, 440, 115),
                 fill=(0, 0, 0)
             )
 
 
-            # -------------------------------------------------
+            # -------------------------------------------
             # SIGN
-            # -------------------------------------------------
+            # -------------------------------------------
 
             draw.text(
                 (25, 30),
@@ -383,9 +446,9 @@ class SignLanguageProcessor(VideoProcessorBase):
             )
 
 
-            # -------------------------------------------------
+            # -------------------------------------------
             # CONFIDENCE
-            # -------------------------------------------------
+            # -------------------------------------------
 
             draw.text(
                 (25, 70),
@@ -394,51 +457,58 @@ class SignLanguageProcessor(VideoProcessorBase):
             )
 
 
-            # -------------------------------------------------
+            # -------------------------------------------
             # RGB -> BGR
-            # -------------------------------------------------
+            # -------------------------------------------
 
-            output_rgb = np.array(image)
+            output = np.array(image)
 
-            output_bgr = (
-                output_rgb[:, :, ::-1]
+            output = (
+                output[:, :, ::-1]
                 .copy()
             )
 
 
-            # -------------------------------------------------
-            # Return processed video frame
-            # -------------------------------------------------
+            # -------------------------------------------
+            # RETURN FRAME
+            # -------------------------------------------
 
             return av.VideoFrame.from_ndarray(
-                output_bgr,
+                output,
                 format="bgr24"
             )
 
 
-        # =====================================================
-        # ERROR HANDLING
-        # =====================================================
+        # =================================================
+        # ERROR
+        # =================================================
 
         except Exception as e:
+
+            # -------------------------------------------
+            # Camera frame
+            # -------------------------------------------
 
             bgr = frame.to_ndarray(
                 format="bgr24"
             )
 
-            rgb = bgr[:, :, ::-1].copy()
+            rgb = (
+                bgr[:, :, ::-1]
+                .copy()
+            )
 
             image = Image.fromarray(rgb)
 
             draw = ImageDraw.Draw(image)
 
 
-            # -------------------------------------------------
+            # -------------------------------------------
             # Error box
-            # -------------------------------------------------
+            # -------------------------------------------
 
             draw.rectangle(
-                (10, 10, 700, 100),
+                (10, 10, 720, 105),
                 fill=(0, 0, 0)
             )
 
@@ -452,21 +522,24 @@ class SignLanguageProcessor(VideoProcessorBase):
 
             draw.text(
                 (20, 55),
-                str(e)[:100],
+                str(e)[:110],
                 fill=(255, 255, 255)
             )
 
 
-            output_rgb = np.array(image)
+            # -------------------------------------------
+            # Return frame
+            # -------------------------------------------
 
-            output_bgr = (
-                output_rgb[:, :, ::-1]
+            output = np.array(image)
+
+            output = (
+                output[:, :, ::-1]
                 .copy()
             )
 
-
             return av.VideoFrame.from_ndarray(
-                output_bgr,
+                output,
                 format="bgr24"
             )
 
@@ -486,13 +559,16 @@ webrtc_streamer(
             "width": {
                 "ideal": 640
             },
+
             "height": {
                 "ideal": 480
             },
+
             "frameRate": {
                 "ideal": 10
             }
         },
+
         "audio": False
     },
 
